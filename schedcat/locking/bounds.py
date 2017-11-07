@@ -81,6 +81,21 @@ def get_cpp_model_rw(all_tasks, use_task_period=False):
                 rsi.add_request_rw(req.res_id, req.max_reads, req.max_read_length, cpp.READ, req.priority)
     return rsi
 
+def get_cpp_model_w(all_tasks, use_task_period=False):
+    rsi = cpp.ResourceSharingInfo(len(all_tasks))
+    for t in all_tasks:
+        rsi.add_task(t.period,
+                     t.period if use_task_period else t.response_time,
+                     t.partition,
+                     t.preemption_level, # mapped to fixed priorities in the C++ code
+                     t.cost,
+                     t.deadline)
+        for req in t.resmodel:
+            req = t.resmodel[req]
+            if req.max_writes > 0:
+                rsi.add_request(req.res_id, req.max_writes, req.max_write_length, req.priority)
+    return rsi
+
 # S-aware bounds
 
 def apply_mpcp_bounds(all_tasks, use_virtual_spin=False):
@@ -557,4 +572,21 @@ def apply_no_progress_priority_bounds(all_tasks, num_cpus):
         # blocking. Returns ULONG_MAX if LP could not be
         # solved.
         t.response_time = t.cost + res.get_blocking_term(i)
+    return res
+
+def apply_pfp_lp_smr_msrp_bounds(all_tasks):
+    model = get_cpp_model_w(all_tasks)
+    res = lp_cpp.lp_pfp_msrp_bounds(model)
+    for i, _ in enumerate(all_tasks):
+        all_tasks[i].blocked = res.get_blocking_term(i)
+    return res
+
+def apply_smr_task_fair_mutex_bounds(all_tasks, procs_per_cluster,
+                                 dedicated_irq=cpp.NO_CPU, pi_aware=False):
+    model = get_cpp_model_w(all_tasks)
+    res = cpp.task_fair_mutex_bounds(model, procs_per_cluster, dedicated_irq)
+    if pi_aware:
+        apply_pi_aware_spin_inflation(all_tasks, res)
+    else:
+        apply_suspension_oblivious(all_tasks, res)
     return res
